@@ -42,6 +42,12 @@ bot_cut_percentage = 10  # 10% cut
 # Store the pool start time
 pool_start_time = None  # To be set when the pool starts
 
+# Add pool status tracking variables
+bronze_pool_open = False
+silver_pool_open = False
+gold_pool_open = False
+
+
 # Function to create an invoice for payment (only accepts USDT)
 def create_invoice(amount, description):
     url = CRYPTBOT_API_URL + 'createInvoice'
@@ -265,29 +271,62 @@ async def handle_join(update, context, entry_fee, pool_participants, pool_name):
         await context.bot.send_message(chat_id=chat_id, text="Error creating payment. Please try again later.")
 
 # Functions to start and end pools
+# Modify start and end functions to update pool status
 async def start_bronze_pool(context):
-    global pool_start_time
+    global pool_start_time, bronze_pool_open
     pool_start_time = datetime.now(timezone.utc)
+    bronze_pool_open = True
     await context.bot.send_message(chat_id=context.job.context, text="The Bronze Pool is now open! Use /join_bronze to participate.")
 
 async def end_bronze_pool(context):
+    global bronze_pool_open
+    bronze_pool_open = False
     await end_specific_pool(context, bronze_pool_participants, bronze_pool_amount, "Bronze Pool")
 
+# Add similar modifications for silver and gold pools
 async def start_silver_pool(context):
-    global pool_start_time
+    global pool_start_time, silver_pool_open
     pool_start_time = datetime.now(timezone.utc)
+    silver_pool_open = True
     await context.bot.send_message(chat_id=context.job.context, text="The Silver Pool is now open! Use /join_silver to participate.")
 
 async def end_silver_pool(context):
+    global silver_pool_open
+    silver_pool_open = False
     await end_specific_pool(context, silver_pool_participants, silver_pool_amount, "Silver Pool")
 
 async def start_gold_pool(context):
-    global pool_start_time
+    global pool_start_time, gold_pool_open
     pool_start_time = datetime.now(timezone.utc)
+    gold_pool_open = True
     await context.bot.send_message(chat_id=context.job.context, text="The Gold Pool is now open! Use /join_gold to participate.")
 
 async def end_gold_pool(context):
+    global gold_pool_open
+    gold_pool_open = False
     await end_specific_pool(context, gold_pool_participants, gold_pool_amount, "Gold Pool")
+
+
+# Implement the /status command
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    # Determine the status of each pool
+    bronze_status = "Open" if bronze_pool_open else "Closed"
+    silver_status = "Open" if silver_pool_open else "Closed"
+    gold_status = "Open" if gold_pool_open else "Closed"
+
+    # Create a message showing the pool status
+    status_message = (
+        f"🟢 **Pool Status** 🟢\n"
+        f"Bronze Pool: {bronze_status}, Current Size: ${bronze_pool_amount:.2f}\n"
+        f"Silver Pool: {silver_status}, Current Size: ${silver_pool_amount:.2f}\n"
+        f"Gold Pool: {gold_status}, Current Size: ${gold_pool_amount:.2f}\n"
+    )
+
+    # Send the status message to the user
+    await context.bot.send_message(chat_id=chat_id, text=status_message, parse_mode='Markdown')
+
 
 async def end_specific_pool(context, pool_participants, pool_amount, pool_name):
     # Function to select a winner and reset the pool
@@ -354,19 +393,29 @@ def main():
     scheduler.add_job(start_bronze_pool, CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata'), args=[application])
     scheduler.add_job(end_bronze_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata'), args=[application])
 
-    scheduler.add_job(start_silver_pool, CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata', day='*/3'), args=[application])
-    scheduler.add_job(end_silver_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata', day='*/3'), args=[application])
+    scheduler.add_job(start_silver_pool, CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata', day='*/3'),
+                      args=[application])
+    scheduler.add_job(end_silver_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata', day='*/3'),
+                      args=[application])
 
-    scheduler.add_job(start_gold_pool, CronTrigger(day_of_week='sun', hour=0, minute=0, timezone='Asia/Kolkata'), args=[application])
-    scheduler.add_job(end_gold_pool, CronTrigger(day_of_week='sun', hour=23, minute=59, timezone='Asia/Kolkata'), args=[application])
+    scheduler.add_job(start_gold_pool, CronTrigger(day_of_week='sun', hour=0, minute=0, timezone='Asia/Kolkata'),
+                      args=[application])
+    scheduler.add_job(end_gold_pool, CronTrigger(day_of_week='sun', hour=23, minute=59, timezone='Asia/Kolkata'),
+                      args=[application])
 
     scheduler.start()
 
-    # Command handlers
-    application.add_handler(CommandHandler('start', start_command))  # Add this line for /start command
-    application.add_handler(CommandHandler('join_bronze', lambda u, c: handle_join(u, c, bronze_entry_fee, bronze_pool_participants, "Bronze Pool")))
-    application.add_handler(CommandHandler('join_silver', lambda u, c: handle_join(u, c, silver_entry_fee, silver_pool_participants, "Silver Pool")))
-    application.add_handler(CommandHandler('join_gold', lambda u, c: handle_join(u, c, gold_entry_fee, gold_pool_participants, "Gold Pool")))
+    # Add command handlers
+    application.add_handler(CommandHandler('start', start_command))
+    application.add_handler(CommandHandler('join_bronze',
+                                           lambda u, c: handle_join(u, c, bronze_entry_fee, bronze_pool_participants,
+                                                                    "Bronze Pool")))
+    application.add_handler(CommandHandler('join_silver',
+                                           lambda u, c: handle_join(u, c, silver_entry_fee, silver_pool_participants,
+                                                                    "Silver Pool")))
+    application.add_handler(CommandHandler('join_gold',
+                                           lambda u, c: handle_join(u, c, gold_entry_fee, gold_pool_participants,
+                                                                    "Gold Pool")))
 
     # Other command handlers
     application.add_handler(CommandHandler('rules', rules))
@@ -374,10 +423,11 @@ def main():
     application.add_handler(CommandHandler('my_info', my_info))
     application.add_handler(CommandHandler('pool_size', pool_size))
     application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(CommandHandler('status', status))  # Add the new /status command handler
 
     print("Starting Lucky Draw Pool bot...")
     application.run_polling()
 
+
 if __name__ == '__main__':
     main()
-
