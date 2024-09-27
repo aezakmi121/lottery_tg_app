@@ -36,6 +36,17 @@ gold_entry_fee = 50.0  # $50
 # Track invoice statuses (In real-world, use a database)
 invoice_tracker = {}
 
+# Variables to store pool start and end times
+next_bronze_start_time = None
+next_bronze_end_time = None
+
+next_silver_start_time = None
+next_silver_end_time = None
+
+next_gold_start_time = None
+next_gold_end_time = None
+
+
 # Bot's cut percentage
 bot_cut_percentage = 10  # 10% cut
 
@@ -271,62 +282,92 @@ async def handle_join(update, context, entry_fee, pool_participants, pool_name):
         await context.bot.send_message(chat_id=chat_id, text="Error creating payment. Please try again later.")
 
 # Functions to start and end pools
-# Modify start and end functions to update pool status
+# Modify start functions to set next opening and closing times
 async def start_bronze_pool(context):
-    global pool_start_time, bronze_pool_open
-    pool_start_time = datetime.now(timezone.utc)
+    global bronze_pool_open, next_bronze_end_time
     bronze_pool_open = True
+    next_bronze_end_time = datetime.now(timezone.utc) + timedelta(hours=24)  # Pool runs for 24 hours
     await context.bot.send_message(chat_id=context.job.context, text="The Bronze Pool is now open! Use /join_bronze to participate.")
 
 async def end_bronze_pool(context):
-    global bronze_pool_open
+    global bronze_pool_open, next_bronze_start_time
     bronze_pool_open = False
+    next_bronze_start_time = datetime.now(timezone.utc) + timedelta(days=1)  # Opens next day at 0:00
     await end_specific_pool(context, bronze_pool_participants, bronze_pool_amount, "Bronze Pool")
 
-# Add similar modifications for silver and gold pools
 async def start_silver_pool(context):
-    global pool_start_time, silver_pool_open
-    pool_start_time = datetime.now(timezone.utc)
+    global silver_pool_open, next_silver_end_time
     silver_pool_open = True
+    next_silver_end_time = datetime.now(timezone.utc) + timedelta(hours=24)  # Pool runs for 24 hours
     await context.bot.send_message(chat_id=context.job.context, text="The Silver Pool is now open! Use /join_silver to participate.")
 
 async def end_silver_pool(context):
-    global silver_pool_open
+    global silver_pool_open, next_silver_start_time
     silver_pool_open = False
+    next_silver_start_time = datetime.now(timezone.utc) + timedelta(days=3)  # Opens every 3 days
     await end_specific_pool(context, silver_pool_participants, silver_pool_amount, "Silver Pool")
 
 async def start_gold_pool(context):
-    global pool_start_time, gold_pool_open
-    pool_start_time = datetime.now(timezone.utc)
+    global gold_pool_open, next_gold_end_time
     gold_pool_open = True
+    next_gold_end_time = datetime.now(timezone.utc) + timedelta(hours=24)  # Pool runs for 24 hours
     await context.bot.send_message(chat_id=context.job.context, text="The Gold Pool is now open! Use /join_gold to participate.")
 
 async def end_gold_pool(context):
-    global gold_pool_open
+    global gold_pool_open, next_gold_start_time
     gold_pool_open = False
+    next_gold_start_time = datetime.now(timezone.utc) + timedelta(days=7)  # Opens every Sunday
     await end_specific_pool(context, gold_pool_participants, gold_pool_amount, "Gold Pool")
 
+# Helper function to format the time remaining
+def format_time_remaining(time_remaining):
+    days, seconds = time_remaining.days, time_remaining.seconds
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
+    elif hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
 
+# Implement the /status command
 # Implement the /status command
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # Determine the status of each pool
+    # Determine the status and time information for each pool
     bronze_status = "Open" if bronze_pool_open else "Closed"
+    if bronze_pool_open:
+        time_left_bronze = format_time_remaining(next_bronze_end_time - datetime.now(timezone.utc))
+        bronze_info = f"Closes in: {time_left_bronze}"
+    else:
+        bronze_info = f"Opens at: {next_bronze_start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}" if next_bronze_start_time else "N/A"
+
     silver_status = "Open" if silver_pool_open else "Closed"
+    if silver_pool_open:
+        time_left_silver = format_time_remaining(next_silver_end_time - datetime.now(timezone.utc))
+        silver_info = f"Closes in: {time_left_silver}"
+    else:
+        silver_info = f"Opens at: {next_silver_start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}" if next_silver_start_time else "N/A"
+
     gold_status = "Open" if gold_pool_open else "Closed"
+    if gold_pool_open:
+        time_left_gold = format_time_remaining(next_gold_end_time - datetime.now(timezone.utc))
+        gold_info = f"Closes in: {time_left_gold}"
+    else:
+        gold_info = f"Opens at: {next_gold_start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}" if next_gold_start_time else "N/A"
 
     # Create a message showing the pool status
     status_message = (
         f"🟢 **Pool Status** 🟢\n"
-        f"Bronze Pool: {bronze_status}, Current Size: ${bronze_pool_amount:.2f}\n"
-        f"Silver Pool: {silver_status}, Current Size: ${silver_pool_amount:.2f}\n"
-        f"Gold Pool: {gold_status}, Current Size: ${gold_pool_amount:.2f}\n"
+        f"Bronze Pool: {bronze_status}, Current Size: ${bronze_pool_amount:.2f}\n    {bronze_info}\n"
+        f"Silver Pool: {silver_status}, Current Size: ${silver_pool_amount:.2f}\n    {silver_info}\n"
+        f"Gold Pool: {gold_status}, Current Size: ${gold_pool_amount:.2f}\n    {gold_info}\n"
     )
 
     # Send the status message to the user
     await context.bot.send_message(chat_id=chat_id, text=status_message, parse_mode='Markdown')
-
 
 async def end_specific_pool(context, pool_participants, pool_amount, pool_name):
     # Function to select a winner and reset the pool
