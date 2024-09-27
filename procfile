@@ -1,1 +1,1 @@
-worker: python your_bot_script.py
+worker: python Raffle_Final_Crypto.py
