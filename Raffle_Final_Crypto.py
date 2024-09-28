@@ -709,10 +709,14 @@ from telegram.ext import MessageHandler, filters
 def main():
     global next_bronze_start_time, next_silver_start_time, next_gold_start_time
 
+    logging.info("Setting up the bot application...")
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Set up the scheduler
     scheduler = AsyncIOScheduler()
+    
+    logging.info("Setting up scheduled jobs for pools...")
 
     # Schedule pool start and end times
     # Bronze Pool
@@ -733,7 +737,7 @@ def main():
     scheduler.add_job(end_gold_pool, CronTrigger(day_of_week='sun', hour=23, minute=59, timezone='Asia/Kolkata'), args=[application])
     next_gold_start_time = gold_trigger.get_next_fire_time(None, datetime.now(timezone.utc))
 
-    # Start the scheduler
+    logging.info("Starting the scheduler...")
     scheduler.start()
 
     # Command handlers
@@ -742,8 +746,6 @@ def main():
     application.add_handler(CommandHandler('join_bronze', lambda u, c: handle_join(u, c, bronze_entry_fee, "Bronze Pool")))
     application.add_handler(CommandHandler('join_silver', lambda u, c: handle_join(u, c, silver_entry_fee, "Silver Pool")))
     application.add_handler(CommandHandler('join_gold', lambda u, c: handle_join(u, c, gold_entry_fee, "Gold Pool")))
-
-
     # Other command handlers
     application.add_handler(CommandHandler('rules', rules))
     application.add_handler(CommandHandler('players', players))
@@ -755,7 +757,7 @@ def main():
     # Add a message handler for the custom keyboard buttons
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
 
-    print("Starting Lucky Draw Pool bot...")
+    logging.info("Starting Lucky Draw Pool bot...")
     application.run_polling()
 
 if __name__ == '__main__':
