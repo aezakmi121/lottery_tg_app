@@ -1,3 +1,21 @@
+# Telegram Bot and Async Scheduler
 python-telegram-bot
 apscheduler
+
+# Database Connector for PostgreSQL
+psycopg2-binary
+
+# HTTP Requests
 requests
+
+# Asynchronous Programming
+asyncio
+
+# Logging (comes with Python, listed for clarity)
+logging
+
+# Datetime Utilities (comes with Python, listed for clarity)
+datetime
+
+# Environment Variable Management
+python-dotenv
