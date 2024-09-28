@@ -21,7 +21,14 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
+    try:
+        logging.info("Attempting to connect to the database...")
+        connection = psycopg2.connect(DATABASE_URL, sslmode='require')
+        logging.info("Database connection established successfully.")
+        return connection
+    except Exception as e:
+        logging.error(f"Failed to connect to the database: {e}")
+        raise e  # Reraise the exception to let the calling function handle it
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -257,9 +264,11 @@ def transfer_to_winner(user_id, amount, asset='USDT', max_retries=3):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-
+    logging.info(f"Received /start command from chat_id: {chat_id}")
+    
     try:
         # Insert the user into the database if they don't already exist
+        logging.info(f"Attempting to insert user {chat_id} into the database.")
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -270,9 +279,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         cur.close()
         conn.close()
-
+        logging.info(f"User {chat_id} inserted successfully.")
+    
     except Exception as e:
-        logging.error(f"Database error: {e}")
+        logging.error(f"Database error in start_command: {e}")
         await context.bot.send_message(chat_id=chat_id, text="An error occurred while registering you. Please try again.")
         return
 
@@ -287,7 +297,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Create a ReplyKeyboardMarkup object
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-
+    
     # Send a message with the custom keyboard
     welcome_message = (
         "🎉 Welcome to the Lucky Draw Pool Bot! 🎉\n\n"
@@ -295,7 +305,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "You can join pools, check pool status, view rules, and more!"
     )
     await context.bot.send_message(chat_id=chat_id, text=welcome_message, reply_markup=reply_markup)
-
 # Function to broadcast a message to all users
 async def broadcast_message(application, message):
     try:
@@ -320,7 +329,8 @@ async def broadcast_message(application, message):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text  # Get the text from the pressed button
-
+    logging.info(f"Button pressed: {text} by chat_id: {chat_id}")
+    
     # Map button texts to their respective commands
     if text == "📜 Rules":
         await rules(update, context)
@@ -343,6 +353,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "👛 Set Wallet":
         await context.bot.send_message(chat_id=chat_id, text="Please use the /set_wallet command to set your wallet address.")
     else:
+        logging.warning(f"Unknown command received: {text}")
         await context.bot.send_message(chat_id=chat_id, text="Unknown command. Please use the available buttons.")
 
 
@@ -459,9 +470,11 @@ async def pool_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handle joining the pool
 async def handle_join(update, context, entry_fee, pool_name):
     chat_id = update.effective_chat.id
-
+    logging.info(f"Handling join request for {pool_name} by chat_id: {chat_id}")
+    
     try:
         # Connect to the database
+        logging.info(f"Checking if user {chat_id} is already in the {pool_name}")
         conn = get_db_connection()
         cur = conn.cursor()
 
@@ -474,6 +487,7 @@ async def handle_join(update, context, entry_fee, pool_name):
 
         # If the user is already in the pool, send a message and return
         if already_in_pool:
+            logging.info(f"User {chat_id} is already in the {pool_name}")
             await context.bot.send_message(chat_id=chat_id, text=f"You are already in the {pool_name}.")
             return
 
@@ -482,12 +496,14 @@ async def handle_join(update, context, entry_fee, pool_name):
         await context.bot.send_message(chat_id=chat_id, text="An error occurred while checking pool participation. Please try again.")
         return
 
-    # Create an invoice for the payment
+    # Continue with invoice creation
+    logging.info(f"Creating invoice for user {chat_id} to join the {pool_name}")
     payment_url, invoice_id = create_invoice(entry_fee, f"{pool_name} Entry", chat_id, pool_name)
 
     # If invoice creation was successful, proceed
     if payment_url:
         try:
+            logging.info(f"Invoice created successfully for user {chat_id}. Payment URL: {payment_url}")
             # Notify the user to make the payment
             await context.bot.send_message(chat_id=chat_id,
                                            text=f"To join the {pool_name}, please pay ${entry_fee} using this link: {payment_url}\n\n⏳ You have 15 minutes to complete the payment. If you fail to pay in time, you'll need to try again.")
@@ -505,6 +521,7 @@ async def handle_join(update, context, entry_fee, pool_name):
             await context.bot.send_message(chat_id=chat_id, text="An error occurred while scheduling payment verification. Please try again.")
     else:
         # If invoice creation failed, notify the user
+        logging.error(f"Failed to create an invoice for user {chat_id}")
         await context.bot.send_message(chat_id=chat_id, text="Error creating payment. Please try again later.")
 
 # Modify start functions to set next opening and closing times
