@@ -409,32 +409,29 @@ async def my_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     try:
-        # Connect to the database
         conn = get_db_connection()
+        if conn is None:
+            await context.bot.send_message(chat_id=chat_id, text="Database connection failed. Please try again later.")
+            return
+
         cur = conn.cursor()
 
-        # Fetch user's pool participation data
-        cur.execute("""
-            SELECT pool_name, invoice_id FROM pool_participants WHERE chat_id = %s;
-        """, (chat_id,))
-        
-        # Fetch all records
+        # Detailed logging to check database query
+        logging.info(f"Fetching pool participation for chat_id: {chat_id}")
+        cur.execute("SELECT pool_name, invoice_id FROM pool_participants WHERE chat_id = %s;", (chat_id,))
         user_pools = cur.fetchall()
+        logging.info(f"Query result for chat_id {chat_id}: {user_pools}")
 
         cur.close()
         conn.close()
 
-        # Check if user has participated in any pools
         if user_pools:
-            # Create a formatted string with the user's pool participation info
             pool_info = "\n".join([f"{pool_name} (Invoice ID: {invoice_id})" for pool_name, invoice_id in user_pools])
             await context.bot.send_message(chat_id=chat_id, text=f"Your Info:\n{pool_info}")
         else:
             await context.bot.send_message(chat_id=chat_id, text="You are not currently in any pool.")
-    
     except Exception as e:
-        # Log database errors and notify the user
-        logging.error(f"Database error: {e}")
+        logging.error(f"Database error in my_info for chat_id {chat_id}: {e}")
         await context.bot.send_message(chat_id=chat_id, text="An error occurred while retrieving your info. Please try again.")
 
 # Command to display the current pool size
