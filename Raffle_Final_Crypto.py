@@ -7,6 +7,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from telegram import ReplyKeyboardMarkup
+from apscheduler.util import convert_to_datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from datetime import datetime, timezone, timedelta
 
 # Set up API tokens
@@ -35,6 +38,10 @@ gold_entry_fee = 50.0  # $50
 
 # Track invoice statuses (In real-world, use a database)
 invoice_tracker = {}
+
+# Dictionary to store user wallet addresses
+user_wallets = {}
+
 
 # Variables to store pool start and end times
 next_bronze_start_time = None
@@ -138,14 +145,35 @@ async def check_payment_status(context: ContextTypes.DEFAULT_TYPE):
             # Reschedule the payment check if not yet completed
             context.job_queue.run_once(check_payment_status, 60, data=job_data)
 
-# Function to transfer the prize to the winner
-def transfer_to_winner(user_id, amount, asset='USDT'):
-    valid_user_ids = [participant['chat_id'] for participant in
-                      bronze_pool_participants + silver_pool_participants + gold_pool_participants]
 
-    if user_id not in valid_user_ids:
-        logging.error(f"Invalid user ID {user_id} for transfer. This user is not a participant in the current pools.")
-        return False, "Invalid user ID for transfer."
+async def set_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    # Extract the wallet address from the user's message
+    if context.args:
+        wallet_address = context.args[0]
+
+        # Basic validation of wallet address (can be expanded for specific format validation)
+        if len(wallet_address) < 5:  # Simple check, you can use regex for more specific validations
+            await context.bot.send_message(chat_id=chat_id, text="Invalid wallet address. Please try again.")
+            return
+
+        # Store the wallet address in the user_wallets dictionary
+        user_wallets[chat_id] = wallet_address
+        await context.bot.send_message(chat_id=chat_id, text=f"Your wallet address has been set to: {wallet_address}")
+    else:
+        await context.bot.send_message(chat_id=chat_id,
+                                       text="Please provide a wallet address. Usage: /set_wallet <WALLET_ADDRESS>")
+
+
+def transfer_to_winner(user_id, amount, asset='USDT'):
+    # Check if the user has set a wallet address
+    if user_id not in user_wallets:
+        logging.error(f"User ID {user_id} has not set a wallet address.")
+        return False, "No wallet address found. Please set your wallet address using /set_wallet."
+
+    # Get the user's wallet address
+    wallet_address = user_wallets[user_id]
 
     # Calculate the prize amount after deducting the bot's cut
     prize_amount = amount * (1 - bot_cut_percentage / 100)
@@ -156,7 +184,7 @@ def transfer_to_winner(user_id, amount, asset='USDT'):
         'Crypto-Pay-API-Token': CRYPTBOT_API_TOKEN
     }
     payload = {
-        'user_id': user_id,
+        'user_id': wallet_address,  # Use the wallet address
         'asset': asset,
         'amount': str(prize_amount),
         'spend_id': str(random.randint(1, 1000000)),  # Unique identifier for this transfer
@@ -169,7 +197,7 @@ def transfer_to_winner(user_id, amount, asset='USDT'):
 
         # Check if the response indicates a successful transfer
         if response.status_code == 200 and response.json().get('ok'):
-            logging.info(f"Successfully transferred {prize_amount} {asset} to user ID {user_id}.")
+            logging.info(f"Successfully transferred {prize_amount} {asset} to wallet address {wallet_address}.")
             return True, None
         else:
             error_message = response.json().get('error', {}).get('message', 'Unknown error')
@@ -180,23 +208,62 @@ def transfer_to_winner(user_id, amount, asset='USDT'):
         return False, str(e)
 
 # Command to handle the /start command
+from telegram import ReplyKeyboardMarkup
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    welcome_message = (
-        "Welcome to the Lucky Draw Pool Bot!\n\n"
-        "You can participate in daily, 3-day, and weekly pools to win amazing prizes.\n"
-        "Here are the available commands to get started:\n"
-        "/rules - Learn how the lucky draw pools work.\n"
-        "/join_bronze - Join the Bronze Pool ($10 entry fee).\n"
-        "/join_silver - Join the Silver Pool ($25 entry fee).\n"
-        "/join_gold - Join the Gold Pool ($50 entry fee).\n"
-        "/players - View the number of participants in each pool.\n"
-        "/my_info - See your participation status and pool information.\n"
-        "/pool_size - View the current size of each pool.\n"
-        "/time_left - Check how much time is left until the pool closes.\n"
-        "/help - Display the list of all commands."
+
+    # Define the custom keyboard layout using emojis
+    keyboard = [
+        ["📜 Rules", "📊 Status"],
+        ["🥉 Join Bronze", "🥈 Join Silver", "🥇 Join Gold"],
+        ["👥 Players", "ℹ️ My Info"],
+        ["💰 Pool Size", "🆘 Help"],
+        ["👛 Set Wallet"]
+    ]
+
+    # Create a ReplyKeyboardMarkup object
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard, resize_keyboard=True, one_time_keyboard=False
     )
-    await context.bot.send_message(chat_id=chat_id, text=welcome_message)
+
+    # Send a message with the custom keyboard
+    welcome_message = (
+        "🎉 Welcome to the Lucky Draw Pool Bot! 🎉\n\n"
+        "Use the buttons below to navigate through the commands.\n"
+        "You can join pools, check pool status, view rules, and more!"
+    )
+    await context.bot.send_message(chat_id=chat_id, text=welcome_message, reply_markup=reply_markup)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    text = update.message.text  # Get the text from the pressed button
+
+    # Map button texts to their respective commands
+    if text == "📜 Rules":
+        await rules(update, context)
+    elif text == "📊 Status":
+        await status(update, context)
+    elif text == "🥉 Join Bronze":
+        await handle_join(update, context, bronze_entry_fee, bronze_pool_participants, "Bronze Pool")
+    elif text == "🥈 Join Silver":
+        await handle_join(update, context, silver_entry_fee, silver_pool_participants, "Silver Pool")
+    elif text == "🥇 Join Gold":
+        await handle_join(update, context, gold_entry_fee, gold_pool_participants, "Gold Pool")
+    elif text == "👥 Players":
+        await players(update, context)
+    elif text == "ℹ️ My Info":
+        await my_info(update, context)
+    elif text == "💰 Pool Size":
+        await pool_size(update, context)
+    elif text == "🆘 Help":
+        await help_command(update, context)
+    elif text == "👛 Set Wallet":
+        await context.bot.send_message(chat_id=chat_id, text="Please use the /set_wallet command to set your wallet address.")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="Unknown command. Please use the available buttons.")
+
 
 
 # Command to display the rules
@@ -333,6 +400,7 @@ def format_time_remaining(time_remaining):
 
 # Implement the /status command
 # Implement the /status command
+# Update the /status command to show opening times
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -342,21 +410,33 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time_left_bronze = format_time_remaining(next_bronze_end_time - datetime.now(timezone.utc))
         bronze_info = f"Closes in: {time_left_bronze}"
     else:
-        bronze_info = f"Opens at: {next_bronze_start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}" if next_bronze_start_time else "N/A"
+        if next_bronze_start_time:
+            time_until_bronze_open = format_time_remaining(next_bronze_start_time - datetime.now(timezone.utc))
+            bronze_info = f"Opens in: {time_until_bronze_open}"
+        else:
+            bronze_info = "N/A"
 
     silver_status = "Open" if silver_pool_open else "Closed"
     if silver_pool_open:
         time_left_silver = format_time_remaining(next_silver_end_time - datetime.now(timezone.utc))
         silver_info = f"Closes in: {time_left_silver}"
     else:
-        silver_info = f"Opens at: {next_silver_start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}" if next_silver_start_time else "N/A"
+        if next_silver_start_time:
+            time_until_silver_open = format_time_remaining(next_silver_start_time - datetime.now(timezone.utc))
+            silver_info = f"Opens in: {time_until_silver_open}"
+        else:
+            silver_info = "N/A"
 
     gold_status = "Open" if gold_pool_open else "Closed"
     if gold_pool_open:
         time_left_gold = format_time_remaining(next_gold_end_time - datetime.now(timezone.utc))
         gold_info = f"Closes in: {time_left_gold}"
     else:
-        gold_info = f"Opens at: {next_gold_start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}" if next_gold_start_time else "N/A"
+        if next_gold_start_time:
+            time_until_gold_open = format_time_remaining(next_gold_start_time - datetime.now(timezone.utc))
+            gold_info = f"Opens in: {time_until_gold_open}"
+        else:
+            gold_info = "N/A"
 
     # Create a message showing the pool status
     status_message = (
@@ -410,53 +490,43 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     help_text = (
         "Here are the available commands:\n"
-        "/start - Start interacting with the bot.\n"
-        "/rules - Learn how the lucky draw pool works.\n"
-        "/join_bronze - Join the Bronze Pool ($5 entry fee).\n"
-        "/join_silver - Join the Silver Pool ($10 entry fee).\n"
+        "/start - Start interacting with the bot and see basic instructions.\n"
+        "/rules - Learn how the lucky draw pools work, including entry fees and pool timings.\n"
+        "/join_bronze - Join the Bronze Pool ($10 entry fee).\n"
+        "/join_silver - Join the Silver Pool ($25 entry fee).\n"
         "/join_gold - Join the Gold Pool ($50 entry fee).\n"
         "/players - View the number of participants in each pool.\n"
-        "/my_info - See your participation status and pool information.\n"
-        "/pool_size - View the current size of each pool.\n"
-        "/help - Display this list of commands."
+        "/my_info - See your participation status in the pools.\n"
+        "/pool_size - View the current size of each pool in dollars.\n"
+        "/status - Check the status of each pool, including whether they are open or closed, the current size, and the time left until they close or reopen.\n"
+        "/help - Display this list of commands with their descriptions.\n"
+        "/set_wallet - Set a wallet where the winning amount will be transferred"
     )
     await context.bot.send_message(chat_id=chat_id, text=help_text)
 
 # Set up the bot
 # Set up the bot
+from telegram.ext import MessageHandler, filters
+
 def main():
+    global next_bronze_start_time, next_silver_start_time, next_gold_start_time
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Set up the scheduler
     scheduler = AsyncIOScheduler()
 
     # Schedule pool start and end times
-    scheduler.add_job(start_bronze_pool, CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata'), args=[application])
-    scheduler.add_job(end_bronze_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata'), args=[application])
-
-    scheduler.add_job(start_silver_pool, CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata', day='*/3'),
-                      args=[application])
-    scheduler.add_job(end_silver_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata', day='*/3'),
-                      args=[application])
-
-    scheduler.add_job(start_gold_pool, CronTrigger(day_of_week='sun', hour=0, minute=0, timezone='Asia/Kolkata'),
-                      args=[application])
-    scheduler.add_job(end_gold_pool, CronTrigger(day_of_week='sun', hour=23, minute=59, timezone='Asia/Kolkata'),
-                      args=[application])
+    # (Your existing scheduling code here)
 
     scheduler.start()
 
     # Add command handlers
     application.add_handler(CommandHandler('start', start_command))
-    application.add_handler(CommandHandler('join_bronze',
-                                           lambda u, c: handle_join(u, c, bronze_entry_fee, bronze_pool_participants,
-                                                                    "Bronze Pool")))
-    application.add_handler(CommandHandler('join_silver',
-                                           lambda u, c: handle_join(u, c, silver_entry_fee, silver_pool_participants,
-                                                                    "Silver Pool")))
-    application.add_handler(CommandHandler('join_gold',
-                                           lambda u, c: handle_join(u, c, gold_entry_fee, gold_pool_participants,
-                                                                    "Gold Pool")))
+    application.add_handler(CommandHandler('join_bronze', lambda u, c: handle_join(u, c, bronze_entry_fee, bronze_pool_participants, "Bronze Pool")))
+    application.add_handler(CommandHandler('join_silver', lambda u, c: handle_join(u, c, silver_entry_fee, silver_pool_participants, "Silver Pool")))
+    application.add_handler(CommandHandler('join_gold', lambda u, c: handle_join(u, c, gold_entry_fee, gold_pool_participants, "Gold Pool")))
+    application.add_handler(CommandHandler('set_wallet', set_wallet))
 
     # Other command handlers
     application.add_handler(CommandHandler('rules', rules))
@@ -464,11 +534,13 @@ def main():
     application.add_handler(CommandHandler('my_info', my_info))
     application.add_handler(CommandHandler('pool_size', pool_size))
     application.add_handler(CommandHandler('help', help_command))
-    application.add_handler(CommandHandler('status', status))  # Add the new /status command handler
+    application.add_handler(CommandHandler('status', status))
+
+    # Add a message handler for the custom keyboard buttons
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
 
     print("Starting Lucky Draw Pool bot...")
     application.run_polling()
-
 
 if __name__ == '__main__':
     main()
