@@ -399,8 +399,7 @@ def format_time_remaining(time_remaining):
         return f"{minutes}m"
 
 # Implement the /status command
-# Implement the /status command
-# Update the /status command to show opening times
+# Updated /status command
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -517,11 +516,28 @@ def main():
     scheduler = AsyncIOScheduler()
 
     # Schedule pool start and end times
-    # (Your existing scheduling code here)
+    # Bronze Pool
+    bronze_trigger = CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata')
+    scheduler.add_job(start_bronze_pool, bronze_trigger, args=[application])
+    scheduler.add_job(end_bronze_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata'), args=[application])
+    next_bronze_start_time = bronze_trigger.get_next_fire_time(None, datetime.now(timezone.utc))
 
+    # Silver Pool
+    silver_trigger = CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata', day='*/3')
+    scheduler.add_job(start_silver_pool, silver_trigger, args=[application])
+    scheduler.add_job(end_silver_pool, CronTrigger(hour=23, minute=59, timezone='Asia/Kolkata', day='*/3'), args=[application])
+    next_silver_start_time = silver_trigger.get_next_fire_time(None, datetime.now(timezone.utc))
+
+    # Gold Pool
+    gold_trigger = CronTrigger(day_of_week='sun', hour=0, minute=0, timezone='Asia/Kolkata')
+    scheduler.add_job(start_gold_pool, gold_trigger, args=[application])
+    scheduler.add_job(end_gold_pool, CronTrigger(day_of_week='sun', hour=23, minute=59, timezone='Asia/Kolkata'), args=[application])
+    next_gold_start_time = gold_trigger.get_next_fire_time(None, datetime.now(timezone.utc))
+
+    # Start the scheduler
     scheduler.start()
 
-    # Add command handlers
+    # Command handlers
     application.add_handler(CommandHandler('start', start_command))
     application.add_handler(CommandHandler('join_bronze', lambda u, c: handle_join(u, c, bronze_entry_fee, bronze_pool_participants, "Bronze Pool")))
     application.add_handler(CommandHandler('join_silver', lambda u, c: handle_join(u, c, silver_entry_fee, silver_pool_participants, "Silver Pool")))
@@ -541,6 +557,6 @@ def main():
 
     print("Starting Lucky Draw Pool bot...")
     application.run_polling()
-
+    
 if __name__ == '__main__':
     main()
