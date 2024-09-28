@@ -2,7 +2,9 @@ import os
 import requests
 import random
 import asyncio
+import re
 import logging
+import time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -42,6 +44,8 @@ invoice_tracker = {}
 # Dictionary to store user wallet addresses
 user_wallets = {}
 
+# Add a set to store user chat IDs
+user_chat_ids = set()
 
 # Variables to store pool start and end times
 next_bronze_start_time = None
@@ -67,7 +71,7 @@ gold_pool_open = False
 
 
 # Function to create an invoice for payment (only accepts USDT)
-def create_invoice(amount, description):
+def create_invoice(amount, description, max_retries=3):
     url = CRYPTBOT_API_URL + 'createInvoice'
     headers = {
         'Content-Type': 'application/json',
@@ -80,19 +84,28 @@ def create_invoice(amount, description):
         'accepted_assets': 'USDT',
         'description': description,
     }
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        if response.status_code == 200 and response.json().get('ok'):
-            invoice_url = response.json()['result']['bot_invoice_url']
-            invoice_id = response.json()['result']['invoice_id']
-            # Track invoice status
-            invoice_tracker[invoice_id] = {'status': 'pending', 'amount': amount}
-            return invoice_url, invoice_id
-        else:
-            logging.error(f"Error in invoice creation: {response.json()}")
-    except requests.RequestException as e:
-        logging.error(f"HTTP request failed: {e}")
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+
+            if response.status_code == 200 and response.json().get('ok'):
+                invoice_url = response.json()['result']['bot_invoice_url']
+                invoice_id = response.json()['result']['invoice_id']
+                invoice_tracker[invoice_id] = {'status': 'pending', 'amount': amount}
+                return invoice_url, invoice_id
+            else:
+                logging.error(f"Error in invoice creation: {response.json()}")
+                return None, None
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"HTTP request failed: {e}. Attempt {attempt + 1} of {max_retries}")
+            # Implement exponential backoff
+            time.sleep(2 ** attempt)
+
+    # If all retries fail, log and return None
+    logging.error("Failed to create invoice after multiple attempts.")
     return None, None
 
 # Function to check payment status
@@ -146,6 +159,7 @@ async def check_payment_status(context: ContextTypes.DEFAULT_TYPE):
             context.job_queue.run_once(check_payment_status, 60, data=job_data)
 
 
+# Function to set the user's wallet address
 async def set_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -153,8 +167,8 @@ async def set_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         wallet_address = context.args[0]
 
-        # Basic validation of wallet address (can be expanded for specific format validation)
-        if len(wallet_address) < 5:  # Simple check, you can use regex for more specific validations
+        # Basic validation of wallet address using a simple regex (expand this for specific formats)
+        if not re.match(r'^[A-Za-z0-9]{5,}$', wallet_address):
             await context.bot.send_message(chat_id=chat_id, text="Invalid wallet address. Please try again.")
             return
 
@@ -165,54 +179,50 @@ async def set_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id,
                                        text="Please provide a wallet address. Usage: /set_wallet <WALLET_ADDRESS>")
 
-
-def transfer_to_winner(user_id, amount, asset='USDT'):
-    # Check if the user has set a wallet address
+def transfer_to_winner(user_id, amount, asset='USDT', max_retries=3):
     if user_id not in user_wallets:
         logging.error(f"User ID {user_id} has not set a wallet address.")
         return False, "No wallet address found. Please set your wallet address using /set_wallet."
 
-    # Get the user's wallet address
     wallet_address = user_wallets[user_id]
-
-    # Calculate the prize amount after deducting the bot's cut
     prize_amount = amount * (1 - bot_cut_percentage / 100)
-
     url = CRYPTBOT_API_URL + 'transfer'
     headers = {
         'Content-Type': 'application/json',
         'Crypto-Pay-API-Token': CRYPTBOT_API_TOKEN
     }
     payload = {
-        'user_id': wallet_address,  # Use the wallet address
+        'user_id': wallet_address,
         'asset': asset,
         'amount': str(prize_amount),
-        'spend_id': str(random.randint(1, 1000000)),  # Unique identifier for this transfer
+        'spend_id': str(random.randint(1, 1000000)),
         'comment': 'Congratulations! You have won the lucky draw!'
     }
 
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()  # Raise an HTTPError if the HTTP request returned an unsuccessful status code
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            response.raise_for_status()
 
-        # Check if the response indicates a successful transfer
-        if response.status_code == 200 and response.json().get('ok'):
-            logging.info(f"Successfully transferred {prize_amount} {asset} to wallet address {wallet_address}.")
-            return True, None
-        else:
-            error_message = response.json().get('error', {}).get('message', 'Unknown error')
-            logging.error(f"Error during transfer: {error_message}")
-            return False, error_message
-    except requests.RequestException as e:
-        logging.error(f"HTTP request failed during transfer: {e}")
-        return False, str(e)
+            if response.status_code == 200 and response.json().get('ok'):
+                logging.info(f"Successfully transferred {prize_amount} {asset} to wallet address {wallet_address}.")
+                return True, None
+            else:
+                error_message = response.json().get('error', {}).get('message', 'Unknown error')
+                logging.error(f"Error during transfer: {error_message}")
+                return False, error_message
 
-# Command to handle the /start command
-from telegram import ReplyKeyboardMarkup
+        except requests.exceptions.RequestException as e:
+            logging.error(f"HTTP request failed during transfer: {e}. Attempt {attempt + 1} of {max_retries}")
+            time.sleep(2 ** attempt)  # Implement exponential backoff
+
+    logging.error("Failed to transfer to winner after multiple attempts.")
+    return False, "Transfer failed. Please try again later."
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    user_chat_ids.add(chat_id)  # Add the user to the set
 
     # Define the custom keyboard layout using emojis
     keyboard = [
@@ -224,9 +234,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     # Create a ReplyKeyboardMarkup object
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, one_time_keyboard=False
-    )
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
     # Send a message with the custom keyboard
     welcome_message = (
@@ -235,6 +243,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "You can join pools, check pool status, view rules, and more!"
     )
     await context.bot.send_message(chat_id=chat_id, text=welcome_message, reply_markup=reply_markup)
+
+# Function to broadcast a message to all users
+async def broadcast_message(application, message):
+    for chat_id in user_chat_ids:
+        try:
+            await application.bot.send_message(chat_id=chat_id, text=message)
+        except Exception as e:
+            logging.error(f"Error sending message to {chat_id}: {e}")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -334,8 +350,10 @@ async def handle_join(update, context, entry_fee, pool_participants, pool_name):
     payment_url, invoice_id = create_invoice(entry_fee, f"{pool_name} Entry")
 
     if payment_url:
+        # Notify user to make the payment
         await context.bot.send_message(chat_id=chat_id,
-                                       text=f"To join the {pool_name}, please pay ${entry_fee} using this link: {payment_url}")
+                                       text=f"To join the {pool_name}, please pay ${entry_fee} using this link: {payment_url}\n\n⏳ You have 15 minutes to complete the payment. If you fail to pay in time, you'll need to try again.")
+
 
         # Schedule the payment check using 'data'
         context.job_queue.run_once(check_payment_status, 60, data={
@@ -348,12 +366,18 @@ async def handle_join(update, context, entry_fee, pool_participants, pool_name):
     else:
         await context.bot.send_message(chat_id=chat_id, text="Error creating payment. Please try again later.")
 
+
 # Functions to start and end pools
 # Modify start functions to set next opening and closing times
 async def start_bronze_pool(context):
     global bronze_pool_open, next_bronze_end_time
     bronze_pool_open = True
     next_bronze_end_time = datetime.now(timezone.utc) + timedelta(hours=24)  # Pool runs for 24 hours
+
+    # Notify all users
+    message = "🥉 The Bronze Pool is now open and will close in 24 hours! Use /join_bronze to participate."
+    await broadcast_message(context.application, message)
+
     await context.bot.send_message(chat_id=context.job.context, text="The Bronze Pool is now open! Use /join_bronze to participate.")
 
 async def end_bronze_pool(context):
@@ -366,6 +390,11 @@ async def start_silver_pool(context):
     global silver_pool_open, next_silver_end_time
     silver_pool_open = True
     next_silver_end_time = datetime.now(timezone.utc) + timedelta(hours=24)  # Pool runs for 24 hours
+
+    # Notify all users
+    message = "🥈 The Silver Pool is now open and will close in 24 hours! Use /join_silver to participate."
+    await broadcast_message(context.application, message)
+
     await context.bot.send_message(chat_id=context.job.context, text="The Silver Pool is now open! Use /join_silver to participate.")
 
 async def end_silver_pool(context):
@@ -378,6 +407,11 @@ async def start_gold_pool(context):
     global gold_pool_open, next_gold_end_time
     gold_pool_open = True
     next_gold_end_time = datetime.now(timezone.utc) + timedelta(hours=24)  # Pool runs for 24 hours
+
+    # Notify all users
+    message = "🥇 The Gold Pool is now open and will close in 24 hours! Use /join_gold to participate."
+    await broadcast_message(context.application, message)
+
     await context.bot.send_message(chat_id=context.job.context, text="The Gold Pool is now open! Use /join_gold to participate.")
 
 async def end_gold_pool(context):
@@ -557,6 +591,6 @@ def main():
 
     print("Starting Lucky Draw Pool bot...")
     application.run_polling()
-    
+
 if __name__ == '__main__':
     main()
