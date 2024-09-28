@@ -1,21 +1,12 @@
 # Telegram Bot and Async Scheduler
-python-telegram-bot
-apscheduler
+python-telegram-bot==21.6
+apscheduler==3.10.4
 
 # Database Connector for PostgreSQL
-psycopg2-binary
+psycopg2-binary==2.9.9
 
 # HTTP Requests
-requests
-
-# Asynchronous Programming
-asyncio
-
-# Logging (comes with Python, listed for clarity)
-logging
-
-# Datetime Utilities (comes with Python, listed for clarity)
-datetime
+requests==2.32.0
 
 # Environment Variable Management
-python-dotenv
+python-dotenv==1.0.0
