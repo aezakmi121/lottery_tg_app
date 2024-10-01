@@ -411,14 +411,17 @@ async def my_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         conn = get_db_connection()
         if conn is None:
+            logging.error(f"Database connection failed for chat_id: {chat_id}")
             await context.bot.send_message(chat_id=chat_id, text="Database connection failed. Please try again later.")
             return
 
         cur = conn.cursor()
-
-        # Detailed logging to check database query
-        logging.info(f"Fetching pool participation for chat_id: {chat_id}")
+        logging.info(f"Executing query to fetch pool participation for chat_id: {chat_id}")
+        
+        # Execute the query
         cur.execute("SELECT pool_name, invoice_id FROM pool_participants WHERE chat_id = %s;", (chat_id,))
+        
+        # Fetch results
         user_pools = cur.fetchall()
         logging.info(f"Query result for chat_id {chat_id}: {user_pools}")
 
